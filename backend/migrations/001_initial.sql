@@ -67,9 +67,59 @@ CREATE TABLE `jobs` (
   `equipment` varchar(40) DEFAULT NULL,
   `parts` json DEFAULT NULL,
   `note` text,
+  `version` int NOT NULL DEFAULT '1',
+  `source` varchar(20) DEFAULT NULL,
+  `batch_no` varchar(64) DEFAULT NULL,
+  `updated_at` varchar(40) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `code` (`code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=184 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--
+-- Table structure for table `job_import_batches`
+--
+
+DROP TABLE IF EXISTS `job_import_batches`;
+CREATE TABLE `job_import_batches` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `batch_no` varchar(64) NOT NULL,
+  `content_hash` varchar(64) NOT NULL,
+  `state` varchar(20) NOT NULL,
+  `actor` varchar(100) DEFAULT NULL,
+  `total` int DEFAULT NULL,
+  `counts` json DEFAULT NULL,
+  `receipt` json DEFAULT NULL,
+  `error` text,
+  `created` varchar(40) DEFAULT NULL,
+  `updated` varchar(40) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `batch_no` (`batch_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--
+-- Table structure for table `job_import_rows`
+--
+
+DROP TABLE IF EXISTS `job_import_rows`;
+CREATE TABLE `job_import_rows` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `batch_id` int NOT NULL,
+  `line` int NOT NULL,
+  `code` varchar(60) DEFAULT NULL,
+  `version` int DEFAULT NULL,
+  `payload` json DEFAULT NULL,
+  `content_hash` varchar(64) DEFAULT NULL,
+  `outcome` varchar(20) NOT NULL,
+  `reason_code` varchar(40) DEFAULT NULL,
+  `reason` text,
+  `job_id` int DEFAULT NULL,
+  `accepted_version` int DEFAULT NULL,
+  `current_version` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `batch_id` (`batch_id`,`line`),
+  KEY `ix_job_import_rows_batch_outcome` (`batch_id`,`outcome`),
+  CONSTRAINT `job_import_rows_ibfk_1` FOREIGN KEY (`batch_id`) REFERENCES `job_import_batches` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --

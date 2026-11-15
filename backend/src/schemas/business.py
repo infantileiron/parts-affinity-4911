@@ -1,5 +1,5 @@
 from pydantic import BaseModel,Field,field_validator
-from typing import Literal
+from typing import Literal,Union
 from src.constants.enums import PARTS
 class Login(BaseModel):email:str;password:str
 class JobInput(BaseModel):
@@ -13,6 +13,19 @@ class JobInput(BaseModel):
   values=sorted(set(p.strip() for p in v))
   if any(p not in PARTS for p in values):raise ValueError('备件必须来自12项标准目录')
   return values
+class JobBatchInput(BaseModel):
+ batch_no:str=Field(min_length=1,max_length=64)
+ rows:list[Union[dict,str]]=Field(min_length=1,max_length=2000)
+ commit:bool=True
+ @field_validator('batch_no')
+ @classmethod
+ def validate_batch_no(cls,v):
+  text=v.strip()
+  if not text:raise ValueError('批号不能为空')
+  # 批号会出现在查询路径中，禁止斜杠与空白以免路由歧义。
+  if any(ch in text for ch in '/\\?#') or any(ch.isspace() for ch in text):
+   raise ValueError('批号不能包含斜杠、问号、井号或空白字符')
+  return text
 class RunInput(BaseModel):
  name:str=Field(min_length=2,max_length=100)
  equipment:Literal['全部','泵组','压缩机','风机']='全部'

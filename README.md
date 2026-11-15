@@ -6,7 +6,7 @@
 
 远航设备服务的维修策划组负责泵组、压缩机、风机三类设备，现有180张历史作业。每天从维修记录导出 `远航_维保用件_20261115.xlsx`，人工划线找共同用件，再把经验写进指引。三个痛点是重复备件把次数放大、只看一起出现而忽略总体使用率、方案缺少来源证据。上游为实际维保作业；本项目替代集合整理、关联挖掘和兼容性审阅；下游为组长编写作业指引。本项目不管理库存、采购或销售订单。
 
-四模块是作业清单（录入/修订）、阈值配置（异步挖掘）、规则解释（支持度/置信度/提升度）、备件包（来源规则/说明/签核）。实体 Job、MiningRun、AssociationRule、Kit 都真实持久化；规则按批次单独入表，备件包通过rule_id关联。
+四模块是作业清单（录入/修订/批量导入）、阈值配置（异步挖掘）、规则解释（支持度/置信度/提升度）、备件包（来源规则/说明/签核）。实体 Job、JobImportBatch、JobImportRow、MiningRun、AssociationRule、Kit 都真实持久化；规则按批次单独入表，备件包通过rule_id关联。
 
 |角色|页面权限|典型动作|
 |---|---|---|
@@ -29,12 +29,26 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 1. 08:50 viewer 打开YH-1115-001至180，核对泵组作业背景。
 2. 09:00 analyst 查看目录：轴承、密封圈、润滑脂、滤芯、垫片、联轴器、皮带、紧固件、叶轮、阀片、传感器、清洗剂。
-3. 09:10 录入 `YH-1115-181`，泵组，用件“轴承,润滑脂,密封圈”。
+3. 09:10 录入 `YH-1115-181`，泵组，用件“轴承,润滑脂,密封圈”；或粘贴多行批量导入并查看逐行回执。
 4. 09:20 检查重复用件会去重，不因领了两份润滑脂而计两次事务。
 5. 09:30 建立“11月泵组联用复核”，支持度0.15、置信度0.6、提升度1。
 6. 09:40 worker完成后刷新，进入规则解释，核对共同作业数和分母。
 7. 10:00 选择有业务价值的一条规则，点击起草备件包，写“仅限同规格泵组，核对密封材质和数量”。
 8. 10:10 admin签核；10:20 viewer下载 `parts-affinity-<run-id>.json`。
+
+## 批量导入与版本对账
+
+作业清单页右侧提供批量导入：每行 `作业号|版本|设备类型|备件|说明`，也可提交 JSON 行（`code/version/equipment/parts/note`）。每条记录带作业号和递增版本，服务端按作业号合并，晚到记录只接纳比当前更高的版本。
+
+- `created` 新建：作业号首次出现，按提交版本建初始版本。
+- `revised` 修订：版本高于当前记录，推进版本并覆盖用件与说明。
+- `expired` 过期：版本低于当前记录，或同版本且内容完全相同（保留原值，不重复写入）。
+- `conflict` 同版本异文：版本相同但设备、用件或说明不同，隔离该行并给出原因。
+- `invalid` 坏行：语法或字段不合法（缺作业号、版本非正整数、设备/备件不在枚举、说明超长等），逐行隔离。
+
+并发导入同一作业时按作业号稳定排序后加锁，条件更新 `version<新版本` 保证只有最高版本胜出，版本号永不回退；死锁会自动重试。同一批号同内容重试不重复写入，直接返回首次回执（`replayed=true`）；批号相同而内容哈希不同返回 409 拒绝。处理到一半中断的批次超过 300 秒可由同内容重试接管，失败批次会重置行状态后重跑。既有 180 张作业从版本 1 接续；人工修订（PUT）把版本推进一版，随后再导入的低版本只会过期，不会覆盖人工修订。
+
+`GET /job-imports` 列出批次，`GET /job-imports/{batch_no}` 返回回执与逐行明细，`GET /job-imports/{batch_no}/reconcile` 校验提交行数=分类之和并标出已被后续版本推进的行（`superseded_later`）。回执冻结在批次上，后续修订不改变历史回执；挖掘快照与指标同样保持提交时的原值。
 
 ## 算法口径和失败态
 
@@ -55,10 +69,10 @@ Python标准库实现Apriori，最大频繁项集长度3。每张含备件的有
 
 恰好frontend/backend/worker/db/redis五服务，全部healthcheck。backend等db/Redis健康，worker额外等backend，frontend等backend。数据库、Redis与计算产物各用命名卷；worker结果在共享`/artifacts`。Nginx `/api/` 转发到后端根路由；Redis和worker不映射宿主端口。`docker compose down -v --remove-orphans` 清理本项目数据。
 
-`backend/src`分routes/controllers/services/models/schemas/middlewares/config/utils/constants；`frontend/src`分api/stores/pages/components/common/hooks/utils/router/constants/types。共用表格、字段、状态标签，表单hooks与HTML转义；请求ID和安全响应头中间件，业务写入审计。首次启动ORM建表，migrations保存实际DDL，不含版本迁移执行器。
+已建库实例升级时执行 `backend/migrations/002_job_imports.sql`（为 jobs 补版本列并把既有行回填为版本1，新导入批次表同样由首次启动ORM建表）。`backend/src`分routes/controllers/services/models/schemas/middlewares/config/utils/constants；`frontend/src`分api/stores/pages/components/common/hooks/utils/router/constants/types。共用表格、字段、状态标签，表单hooks与HTML转义；请求ID和安全响应头中间件，业务写入审计。首次启动ORM建表，migrations保存实际DDL，不含版本迁移执行器。
 
 本地开发：先起db/redis，backend安装requirements，配置DATABASE_URL/REDIS_URL/JWT_SECRET后 `uvicorn src.main:app --reload`；前端使用Nginx同源代理或本地同源开发代理。环境变量为COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、DB_PASSWORD、JWT_SECRET、SEED_DEMO、NETWORK_SUBNET，见.env.example。当前显式子网10.253.108.0/24用于规避本机默认池耗尽，迁移可调整。演示凭据与JWT密钥部署时需替换。
 
 枚举ROLES/STATES/EQUIPMENT/PARTS分别在后端`src/constants/enums.py`、输入schema及前端`src/constants/enums.js`；实体列见models/entities.py。测试与截图在`../../test-artifacts/gb-3108/`。
 
-已知范围：逐条表单/API录入，无CSV导入/删除/分页；规则单worker计算，最大项集3件，签核在站内完成，无采购、外部通知或自动作业指令。Google Fonts离线时回退字体；未做大规模压测。许可证MIT，见LICENSE。
+已知范围：批量导入为粘贴行/JSON API（非xlsx上传），无删除/分页；规则单worker计算，最大项集3件，签核在站内完成，无采购、外部通知或自动作业指令。Google Fonts离线时回退字体；未做大规模压测。许可证MIT，见LICENSE。

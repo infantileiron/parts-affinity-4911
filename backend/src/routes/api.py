@@ -3,11 +3,12 @@ import redis
 from fastapi import APIRouter,Depends,HTTPException,Response
 from src.config.database import db
 from src.models.entities import User,Job,MiningRun,AssociationRule,Kit,Audit
-from src.schemas.business import Login,JobInput,RunInput,KitInput,KitEdit
+from src.schemas.business import Login,JobInput,JobBatchInput,RunInput,KitInput,KitEdit
 from src.middlewares.auth import current,editor,admin
 from src.utils.security import verify,token
 from src.services.business import audit,dump
 from src.services.jobs import save_job
+from src.services import job_imports
 from src.controllers.business import ensure_run,ensure_rule,ensure_kit
 router=APIRouter()
 @router.post('/auth/login')
@@ -24,12 +25,26 @@ def create_job(data:JobInput,u=Depends(editor),s=Depends(db)):
  r=save_job(s,data);audit(s,u,'录入作业 '+r['code']);return r
 @router.put('/jobs/{i}')
 def edit_job(i:int,data:JobInput,u=Depends(editor),s=Depends(db)):
- r=save_job(s,data,i);audit(s,u,'修订作业 '+str(i));return r
+ r=save_job(s,data,i);audit(s,u,f'修订作业 {i} 至版本 {r["version"]}');return r
+@router.get('/job-imports')
+def import_batches(u=Depends(current),s=Depends(db)):return job_imports.list_batches(s)
+@router.get('/job-imports/outcomes')
+def import_outcomes(u=Depends(current)):return job_imports.labels()
+@router.get('/job-imports/{batch_no}')
+def import_detail(batch_no:str,u=Depends(current),s=Depends(db)):return job_imports.detail(s,batch_no)
+@router.get('/job-imports/{batch_no}/reconcile')
+def import_reconcile(batch_no:str,u=Depends(current),s=Depends(db)):return job_imports.reconcile(s,batch_no)
+@router.post('/job-imports')
+def import_rows(data:JobBatchInput,u=Depends(editor),s=Depends(db)):
+ detail,replayed=job_imports.submit(s,data,u)
+ return {**detail,'replayed':replayed}
 @router.get('/runs')
 def runs(u=Depends(current),s=Depends(db)):return [dump(r) for r in s.query(MiningRun).order_by(MiningRun.id.desc()).all()]
 @router.post('/runs')
 def run(data:RunInput,u=Depends(editor),s=Depends(db)):
- rows=[dump(r) for r in s.query(Job).order_by(Job.id).all() if data.equipment=='全部' or r.equipment==data.equipment]
+ # 冻结业务样本：用件/设备/说明的内容决定 checksum，版本元数据不进入样本，保持同内容稳定校验。
+ rows=[{'code':r.code,'equipment':r.equipment,'parts':r.parts,'note':r.note}
+       for r in s.query(Job).order_by(Job.id).all() if data.equipment=='全部' or r.equipment==data.equipment]
  r=MiningRun(**data.model_dump(),result={'snapshot':rows});s.add(r);s.commit()
  try:redis.Redis.from_url(os.environ['REDIS_URL']).rpush('affinity:runs',r.id)
  except redis.RedisError:r.state='failed';r.error='队列暂不可用，请恢复后新建挖掘';s.commit();raise HTTPException(503,r.error)

@@ -15,6 +15,6 @@ def seed():
    if i%3==0:items.update(['轴承','润滑脂'])
    if i%4==0:items.update(['密封圈','垫片'])
    if i%5==0:items.update(['滤芯','清洗剂'])
-   if not s.query(Job).filter_by(code=code).first():s.add(Job(code=code,equipment=equipment,parts=sorted(items),note='远航维修策划组已核对作业用件，仅记录是否使用，不推算数量'))
+   if not s.query(Job).filter_by(code=code).first():s.add(Job(code=code,equipment=equipment,parts=sorted(items),note='远航维修策划组已核对作业用件，仅记录是否使用，不推算数量',version=1,source='seed'))
   s.commit();print({'users':s.query(User).count(),'jobs':s.query(Job).count()})
 if __name__=='__main__':seed()
